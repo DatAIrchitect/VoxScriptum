@@ -4,6 +4,8 @@ Turn your literary passions into immersive auditory experiences with VoxScriptum
 
 ## Overview
 
+### This is under development right now, and not yet usable.
+
 VoxScriptum is your gateway to crafting enchanting audiobooks that resonate with your words and emotions. Here's how it works:
 
 **1. Source Your Text**: Whether it's a PDF from your library or a captivating webpage, VoxScriptum allows you to effortlessly bring in the text that captures your imagination.
