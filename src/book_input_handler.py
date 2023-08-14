@@ -1,19 +1,146 @@
-from internetarchive import get_item
-from pydantic import HttpUrl
+from datetime import datetime, date
 from typing import Union, Optional, List, Dict
-from validators import url
 from urllib.parse import urlparse, quote
-from bs4 import BeautifulSoup
+from httpx import RequestError
 import httpx
-from pathlib import Path
-import os
-import yaml
-import json
-import re
-from ai_book_processing import chain_functions
+from bs4 import BeautifulSoup
+from pydantic import BaseModel, validator, Field, root_validator
+from pydantic import HttpUrl
+from internetarchive import get_item, item
+from dateutil.parser import parse
 
 
-def get_archiveorg_metadata(archive_identifier: Union[HttpUrl, str]) -> dict[str, str]:
+class ArchiveBook(BaseModel):
+    """
+    This is a Pydantic model for Archive.org books.
+
+    This model represents the full metadata for a book on Archive.org.
+    The model is based on the metadata returned by the Archive.org API.
+
+    Attributes:
+        identifier (str): The unique identifier of the book - Required / Primary Key.<br>
+        collection (List[str]): List of collection names the book belongs to.<br>
+        mediatype (Optional[str]): The type of media associated with the book.<br>
+        scanner (Optional[str]): The scanner used for digitization.<br>
+        title (Optional[str]): The title of the book.<br>
+        uploader (Optional[str]): The uploader's name.<br>
+        addeddate (datetime): Date when the book was added, with time set to midnight.<br>
+        publicdate (datetime): Date when the book was made public, with time set to midnight.<br>
+        description (Optional[str]): A brief description of the book.<br>
+        creator (Optional[str]): The creator or author of the book.<br>
+        source (Optional[str]): The source of the book.<br>
+        date (datetime): Date associated with the book, with time set to midnight.<br>
+        identifier_access (Optional[HttpUrl]): Access identifier URL.<br>
+        identifier_ark (Optional[str]): ARK identifier.<br>
+        ppi (Optional[str]): Pixels per inch information.<br>
+        ocr (Optional[str]): OCR (optical character recognition) information.<br>
+        repub_state (Optional[str]): Republishing state information.<br>
+        backup_location (Optional[str]): Location of backup.<br>
+        external_identifier (Optional[str]): External identifier of the book.<br>
+        text_file (Optional[str]): Text file associated with the book.<br>
+        text_url (Optional[HttpUrl]): URL to the text content.<br>
+        text_content (Optional[List[Dict[str, str]]]): List of dictionaries containing text content data.<br>
+        access_restricted_item (Optional[Union[bool, str]]): Information about access restrictions.<br>
+
+    Methods:
+        parse_and_format_datetime(value, field):
+            A validator method to parse and format datetime values.
+
+    Raises:
+        ValueError: If there is an issue with datetime parsing or formatting.
+    """
+    identifier: str
+    collection: Optional[List[str]]
+    mediatype: Optional[str]
+    scanner: Optional[str]
+    title: Optional[str]
+    uploader: Optional[str]
+    addeddate: datetime = datetime.today().replace(microsecond=0)
+    publicdate: datetime = datetime.today().replace(microsecond=0)
+    description: Union[Optional[str], List[str]]
+    creator: Optional[str]
+    source: Optional[str]
+    date: datetime = datetime.today().replace(microsecond=0)
+    identifier_access: Optional[HttpUrl] = Field(alias="identifier-access")
+    identifier_ark: Optional[str] = Field(alias="identifier-ark")
+    ppi: Optional[str]
+    ocr: Optional[str]
+    repub_state: Optional[str] = Field(alias="repub-state")
+    backup_location: Optional[str] = Field(alias="backup-location")
+    external_identifier: Union[Optional[str], List[str]] = Field(alias="external-identifier")
+    text_file: Optional[str] = Field(alias="text-file")
+    text_url: Optional[HttpUrl] = Field(alias="text-url")
+    text_content: Optional[List[Dict[str, str]]] = Field(alias="text-content")
+    access_restricted_item: Optional[Union[bool, str]] = Field(alias="access-restricted-item")
+
+    @validator("addeddate", "publicdate", "date", pre=True, always=True)
+    def parse_and_format_datetime(cls, value, field):
+        """Parse and format datetime values,  that come from the source object.
+           Returns a datetime object with time set to midnight."""
+
+        if isinstance(value, datetime):
+            formatted_datetime = value.replace(hour=0, minute=0, second=0, microsecond=0)
+            return formatted_datetime
+        if isinstance(value, str):
+            parsed_date = parse(value)
+            formatted_datetime = parsed_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            return formatted_datetime
+        raise ValueError(f"Invalid value for {field.name}")
+
+    @validator("description", "external_identifier")
+    def convert_list_to_string(cls, value):
+        """Convert list values to strings."""
+        if isinstance(value, list):
+            return ' '.join(value)
+        return value
+
+    @validator("title", "creator")
+    def convert_to_title_case(cls, value):
+        """Convert text to Title Case."""
+
+        if isinstance(value, str):
+            return value.title()
+        return value
+
+
+def get_archiveorg_item(archive_identifier: Union[HttpUrl, str]) -> item:
+    """
+    Retrieve the base item of an Archive.org item.
+
+    Args:
+        archive_identifier (Union[HttpUrl, str]): The URL or identifier of the Archive.org item.
+
+    Returns:
+        item: The base item of the Archive.org item.
+
+    This function fetches the base item of an Archive.org item from a provided URL or identifier.
+    It checks for the standard location of the identifier first, and if not found, looks in the second location.
+
+    Examples:
+        ```python
+        archive_identifier = 'https://archive.org/details/MagisterLudi-TheGlassBeadGame-HermanHesse/hesperian-environment-health/'
+        item = get_archiveorg_item(archive_identifier)
+        print(item)
+        ```
+    """
+
+    new_identifier = archive_identifier
+    if 'details' in archive_identifier:
+        new_identifier = urlparse(archive_identifier).path.split('/')[-1]
+    elif 'stream' in archive_identifier:
+        new_identifier = urlparse(archive_identifier).path.split('/')[2]
+
+    meta_item = get_item(new_identifier)
+
+    if not meta_item.identifier:
+
+        archive_identifier = urlparse(archive_identifier).path.split('/')[-3]
+        meta_item = get_item(archive_identifier)
+
+    return meta_item
+
+
+def get_archiveorg_metadata(archive_identifier: Union[HttpUrl, str]) -> ArchiveBook:
     """
     Return metadata from an Archive.org identifier.
     This takes a standard Archive org identifier and returns a dictionary containing metadata about the resource.
@@ -34,9 +161,9 @@ def get_archiveorg_metadata(archive_identifier: Union[HttpUrl, str]) -> dict[str
 
         ```python
     # Three different acceptable inputs:
-    archiveorglinkg = return_archiveorg_meta('https://archive.org/details/in.ernet.dli.2015.280019')
-    indentifierint = return_archiveorg_meta('in.ernet.dli.2015.280019')
-    archiveorgtextlink = return_archiveorg_meta('http://archive.org/stream/in.ernet.dli.2015.280019/2015.280019.Essays-By_djvu.txt')
+    archiveorglinkg = get_archiveorg_metadata('https://archive.org/details/in.ernet.dli.2015.280019')
+    indentifierint = get_archiveorg_metadata('in.ernet.dli.2015.280019')
+    archiveorgtextlink = get_archiveorg_metadata('http://archive.org/stream/in.ernet.dli.2015.280019/2015.280019.Essays-By_djvu.txt')
 
         ```
     Note:
@@ -44,62 +171,59 @@ def get_archiveorg_metadata(archive_identifier: Union[HttpUrl, str]) -> dict[str
         and raises a ValueError if metadata access is restricted.
     """
 
-    if url(archive_identifier):
-        if 'details' in archive_identifier:
-            archive_identifier = urlparse(archive_identifier).path.split('/')[-1]
-        elif 'stream' in archive_identifier:
-            archive_identifier = urlparse(archive_identifier).path.split('/')[2]
+    meta_item = get_archiveorg_item(archive_identifier)
 
-    item = get_item(archive_identifier)
-
-    files = list(item.get_files())
-
+    # This will convert the dict items to a list in order to identify the text file.
+    files = list(meta_item.get_files())
     try:
         textfile = [file for file in files if file.format == 'DjVuTXT'][0].metadata.get('name')
-    except TypeError:
+    except IndexError:
         textfile = ''
 
-    metadict = dict(item.metadata.items())
+    metadict = meta_item.metadata.items()
+    archive_book = ArchiveBook(**dict(metadict))
 
-    if metadict.get('access-restricted-item'):
+    archive_book.text_file = textfile
+
+    if archive_book.access_restricted_item:
         raise ValueError("Access to metadata is restricted.")
 
-    metadict['description'] = ' '.join(BeautifulSoup(metadict.get('description'), 'lxml').stripped_strings)
+    try:
+        archive_book.text_url = f"{archive_book.identifier_access}/{quote(archive_book.text_file)}".replace('details','stream')
+        archive_book.text_url = HttpUrl(archive_book.text_url, scheme="http")
+    except ValueError as failed_text_url:
+        raise ValueError(f'No text file found {failed_text_url}') from failed_text_url
 
-    if textfile:
-        metadict['text_file'] = textfile
-        metadict['text_url'] = f"{metadict.get('identifier-access')}/{quote(metadict.get('text_file'))}".replace('details', 'stream')
+    archive_book.description = ' '.join(BeautifulSoup(archive_book.description, 'lxml').stripped_strings)
 
-    return metadict
+    archive_book.text_file = textfile
+
+    try:
+        return archive_book
+    except ValueError as val_error:
+        raise ValueError(f"Error in parsing metadata: {val_error}") from val_error
 
 
-def return_archive_text(archive_identifier: Union[HttpUrl, str]) -> Optional[str]:
+def return_archive_text(archive_identifier: Union[HttpUrl, str]) -> ArchiveBook:
     """
     Retrieve and return text content from an Archive.org identifier.
+
     Args:
-        archive_identifier (str):
-            The identifier for the Archive.org resource. It can be an identifier or archive.org url
+        archive_identifier (str or HttpUrl):
+            The identifier or URL for the Archive.org resource.
+
     Returns:
-        Optional[str]:
-            The extracted text content from the Archive.org resource, or None if not found.
+        ArchiveBook:
+            An instance of the ArchiveBook class with the extracted data,
+            or None if the data is not found.
+
     Raises:
         ValueError:
             If there is an issue accessing the text content or if the response is not valid.
-    Example:
-        You can use this function to retrieve text content from an Archive.org identifier:
-
-        ```python
-    text_content = return_archive_text('https://archive.org/details/in.ernet.dli.2015.280019')
-        ```
-
-    Note:
-        This function retrieves text content from Archive.org resources. It uses the provided identifier
-        to access the text content and returns it. If the text content cannot be found or there is an issue
-        with the retrieval, None is returned.
     """
     try:
-        full_archive = get_archiveorg_metadata(archive_identifier)
-        text_url = full_archive.get('text_url')
+        archive_book = get_archiveorg_metadata(archive_identifier)
+        text_url = archive_book.text_url
 
         response = httpx.get(text_url)
         response.raise_for_status()
@@ -108,109 +232,38 @@ def return_archive_text(archive_identifier: Union[HttpUrl, str]) -> Optional[str
         pre_tag = soup.find("pre")
 
         if pre_tag:
-            return pre_tag.string
-        else:
-            return None
+            # Populate the ArchiveBook instance with additional data from the full text book,
+            archive_book.text_content = pre_tag.string
+            return archive_book
 
-    except httpx.RequestError as e:
-        raise ValueError(f"Error accessing the text content: {e}")
-    except Exception as e:
-        raise ValueError(f"An error occurred while processing the text content: {e}")
+        # Raise an exception if pre_tag is missing
+        raise ValueError("pre_tag is missing")
 
+    except RequestError as request_error:
+        error_message = f"Error accessing the text content: {request_error}"
+        raise ValueError(error_message) from request_error
 
-def process_tab_delimited_file(directory_name: Path) -> list[dict[str, str]]:
-    """
-    This function processes a # separated markdown file and returns a list of dicts.
-
-    This markdown file is the first rough version of the edit, where the book publisher separates
-    paragraphs and removes the page numbers and other metadata that will not contribute to the
-    final reading of the Audiobook.
-
-    :param directory_name: The path to the markdown file.
-    :type directory_name: Path
-    :return: A list of dictionaries containing processed paragraphs and metadata.
-    :rtype: list[dict[str, str]]
-    """
-
-    directory_name = Path(directory_name)
-    book_name = directory_name.stem
-
-    with open(directory_name, 'r', encoding='utf-8') as file:
-        file_contents = file.read()
-
-    file_contents = file_contents.replace('*', ' ')
-    items = re.split(r'#', file_contents)
-    items = [item.replace('\n', ' ').replace('\t', ' ').replace('\\', ' or ').replace('/', ' or ').strip() for item in items]
-    items = [item for item in items if item]
-    items = [re.sub(r'\s+', ' ', item) for item in items]
-
-    result = [{'bookname': book_name, 'partext': item, 'paragraphnum': i} for i, item in enumerate(items, 1)]
-
-    # Extract the base file name without extension
-    base_filename = os.path.splitext(os.path.basename(directory_name))[0]
-
-    # Create a YAML output file with the same base name
-    output_path = os.path.join(os.path.dirname(directory_name), f"{base_filename}.yaml")
-    with open(output_path, 'w', encoding='utf-8') as yaml_file:
-        yaml.dump(result, yaml_file, default_flow_style=False)
-
-    return result
+    except Exception as general_error:
+        error_message = f"An error occurred while processing the text content: {general_error}"
+        raise ValueError(error_message) from general_error
 
 
-def save_markdown_json(directory_name: Path) -> List[Dict[str, str]]:
-    """
-    Save processed paragraphs to a JSON file for further use.
+def test_return_archive_text():
+    """Run a test on a few archive org links to make sure they work.
+       Use a private link to make sure it fails and reports correctly.
+       Also user a url with the identifier in the -3 location"""
 
-    This function takes a list of dictionaries containing processed paragraph data and saves them to a JSON file one by one.
-    As each paragraph is completed with the editing process, it appends to this file along with the line number.
-    The resulting JSON file will be used as input by the `generate_voice` function.
+    list_of_archive_books = [
+        'https://archive.org/details/MagisterLudi-TheGlassBeadGame-HermanHesse/hesperian-environment-health/',
+        'https://archive.org/details/Siddhartha-HermanHesse',
+        'https://archive.org/details/philosophylitera0000port',  # This one is private and should fail
+        'https://archive.org/details/ZiniSchopenhauer',
+        'https://archive.org/details/schopenhauer-a.-sobre-la-voluntad-en-la-naturaleza-ocr-2003',
+        'https://archive.org/details/in.ernet.dli.2015.191198']
 
-    :param directory_name: The path to the directory containing the markdown files.
-    :type directory_name: Path
-    :return: A list of dictionaries containing the saved processed paragraphs.
-    :rtype: List[Dict[str, str]]
-    """
-    directory_path = Path(directory_name)
-
-    book_name = directory_path.stem
-    output_path = directory_path.parent.joinpath(book_name).with_suffix('.json')
-
-    result = process_tab_delimited_file(directory_name)
-
-    with open(output_path, 'w', encoding='utf-8') as json_file:
-        for eachpar in result:
-            eachpar['partext'] = chain_functions(eachpar['partext'])
-
-            print(f"Cleaned text {eachpar.get('partext')}")
-            # Append each dictionary as a separate JSON entry
-            json.dump(eachpar, json_file)
-            json_file.write("\n")  # Newline to separate JSON entries
-            # "Write to JSON file"
-
-    return load_json_file(output_path)
-
-
-def load_json_file(file_path: Path) -> Optional[List[Dict[str, str]]]:
-    """
-    Load a JSON file containing processed paragraph data.
-
-    This function reads a JSON file, which is created from the original raw edited markdown file,
-    and returns a list of dictionaries. Each dictionary represents a processed paragraph after
-    being edited with an AI model.
-
-    :param file_path: The path to the JSON file to be loaded.
-    :type file_path: Path
-    :return: A list of dictionaries containing processed paragraph data, or None on error.
-    :rtype: Optional[List[Dict[str, str]]]
-    """
-
-    try:
-        with open(file_path, 'r', encoding='utf-8') as json_file:
-            data = [json.loads(line) for line in json_file]
-
-            return data
-
-    except Exception as e:
-        print(f"Error while loading JSON file: {e}")
-        return None
-
+    for archive_book in list_of_archive_books:
+        try:
+            return_archive_text(archive_book)
+            print(f"Passed Test on {archive_book}")
+        except ValueError as failed_test:
+            print(f"Error for {archive_book}: {failed_test}")
