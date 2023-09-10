@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from typing import Union, Optional, List, Dict
+from typing import Union, Optional, List, Dict, Set,Tuple
 from urllib.parse import urlparse, quote
 from httpx import RequestError
 import httpx
@@ -8,6 +8,11 @@ from pydantic import BaseModel, validator, Field, root_validator
 from pydantic import HttpUrl
 from internetarchive import get_item, item
 from dateutil.parser import parse
+from fuzzywuzzy import fuzz
+import nltk
+from nltk.corpus import words
+from nltk.tokenize import word_tokenize
+
 
 
 class ArchiveBook(BaseModel):
@@ -204,6 +209,99 @@ def get_archiveorg_metadata(archive_identifier: Union[HttpUrl, str]) -> ArchiveB
         raise ValueError(f"Error in parsing metadata: {val_error}") from val_error
 
 
+def filter_strings_with_english_words(strings: List[str]) -> List[str]:
+    """
+    Filters a list of strings to return only those that contain at least one English word longer than 3 characters.
+    Skips checking strings longer than 50 characters.
+
+    :param strings: List of strings to be filtered.
+    :return: List of filtered strings containing at least one English word longer than 3 characters.
+    """
+    filtered_strings = []
+    english_words = set(words.words())
+
+    for string in strings:
+        # Skip checking strings longer than 50 characters
+        if len(string) > 50:
+            filtered_strings.append(string)
+            continue  # Skip the rest of the loop for this string
+
+        # Tokenize the string into words
+        tokens = word_tokenize(string)
+
+        # Check if any token is an English word longer than 3 characters
+        if any(token.lower() in english_words and len(token) > 3 for token in tokens):
+            filtered_strings.append(string)
+
+    return filtered_strings
+
+
+def find_similar_strings(strings: List[str], threshold: int = 60) -> Tuple[List[str], Set[str]]:
+    """
+    Find and remove similar strings in a list based on fuzzy similarity.
+
+    :param strings: List of strings to compare.
+    :param threshold: Similarity threshold. Strings with similarity above this value are considered similar.
+    :return: A tuple containing a list of original strings with similar items removed, and a set of removed items.
+    """
+    similar_groups: List[List[str]] = []
+
+    # Identify similar items
+    for string in strings:
+        found = False
+        for group in similar_groups:
+            if fuzz.ratio(string, group[0]) >= threshold:
+                group.append(string)
+                found = True
+                break
+        if not found:
+            similar_groups.append([string])
+
+    # Remove groups with 3 or more similar items
+    items_to_remove = {item for group in similar_groups if len(group) >= 3 for item in group}
+
+    # Remove items that are similar and non-English
+    filtered_strings = [string for string in strings if string not in items_to_remove]
+    filtered_strings = filter_strings_with_english_words(filtered_strings)
+
+    return filtered_strings, items_to_remove
+
+def merge_paragraphs(lines: List[str]) -> List[str]:
+    """
+    Merge lines into paragraphs based on sentence-ending punctuation.
+
+    :param lines: List of lines to merge into paragraphs.
+    :return: List of merged paragraphs.
+
+    Example:
+    >>> merge_paragraphs(["Hello, ", "world.", "How ", "are you?"])
+    ['Hello, world.', 'How are you?']
+    """
+    paragraphs = []
+    buffer = ""
+
+    for line in lines:
+        # Remove leading and trailing whitespaces
+        line = line.strip()
+
+        # Skip empty lines
+        if not line:
+            continue
+
+        buffer += line + " "
+
+        # Check if the line ends with sentence-ending punctuation
+        if line[-1] in [".", "!", "?"]:
+            paragraphs.append(buffer.strip())
+            buffer = ""
+
+    # Append any remaining content in the buffer
+    if buffer:
+        paragraphs.append(buffer.strip())
+
+    return paragraphs
+
+
 def return_archive_text(archive_identifier: Union[HttpUrl, str]) -> ArchiveBook:
     """
     Retrieve and return text content from an Archive.org identifier.
@@ -233,7 +331,14 @@ def return_archive_text(archive_identifier: Union[HttpUrl, str]) -> ArchiveBook:
 
         if pre_tag:
             # Populate the ArchiveBook instance with additional data from the full text book,
-            archive_book.text_content = pre_tag.string
+            # identifier and text content
+            #TODO First clean the list of paragraphs, and then assign to the text_content field
+            #TODO Remove chapter or page headers that have many duplicate occurences
+            #TODO Remove any text that is not part of the book, such as the Archive.org header and footer
+            #TODO Remove lines with no English words, or only integers
+
+
+            archive_book.text_content = pre_tag.string.split('\n\n')
             return archive_book
 
         # Raise an exception if pre_tag is missing
@@ -248,7 +353,7 @@ def return_archive_text(archive_identifier: Union[HttpUrl, str]) -> ArchiveBook:
         raise ValueError(error_message) from general_error
 
 
-def test_return_archive_text():
+def test_return_archive_text() -> None:
     """Run a test on a few archive org links to make sure they work.
        Use a private link to make sure it fails and reports correctly.
        Also user a url with the identifier in the -3 location"""
