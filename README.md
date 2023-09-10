@@ -1,5 +1,8 @@
 # VoxScriptum: Transforming Texts into Enchanting Audiobooks 📚🔊
 
+![image](https://github.com/DatAIrchitect/VoxScriptum/assets/138335719/5d1bbb6c-e467-4cf9-b252-29d2c4976ae7)
+
+
 Turn your literary passions into immersive auditory experiences with VoxScriptum! 🎉 Step into a world where written words come to life, creating a symphony of imagination and sound. From classic literature to contemporary works, VoxScriptum seamlessly merges advanced AI technologies to transform your texts into captivating audiobooks.
 
 ## Overview
