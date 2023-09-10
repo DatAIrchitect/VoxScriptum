@@ -1,6 +1,8 @@
 # VoxScriptum: Transforming Texts into Enchanting Audiobooks 📚🔊
 
-![image](https://github.com/DatAIrchitect/VoxScriptum/assets/138335719/eede86d0-f9c1-49d3-8f91-a40c125d7bec)
+<p align="center">
+  <img src="https://github.com/DatAIrchitect/VoxScriptum/assets/138335719/eede86d0-f9c1-49d3-8f91-a40c125d7bec" alt="Centered Image" />
+</p>
 
 
 
